@@ -1,0 +1,11 @@
+.vs/
+Debug/
+Release/
+x64/
+*.user
+
+*.json
+
+out/
+*.rar
+*.zip
