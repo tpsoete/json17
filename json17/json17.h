@@ -103,22 +103,24 @@ public:
 
 	template<class Target>
 	static std::unique_ptr<writer> New(Target& target) {
+		static_assert(std::is_base_of_v<writer, writer_interface<Target>>);
 		return std::make_unique<writer_interface<Target>>(target);
 	}
 };
 
 // output iterators of char
 template<class OutIt>
-class writer_interface : public writer 
+class writer_interface : public writer
 {
 public:
-	static_assert(std::is_same_v<std::iterator_traits<OutIt>::value_type, char>);
+	// make sure OutIt is an output iterator of char
+	static_assert(std::is_void<std::void_t<decltype(*++std::declval<OutIt>() = ' ')>>::value);
 
 	OutIt it;
 	writer_interface(OutIt it) : it(it) {}
-	void write(char ch) override { *(it++) = ch; }
+	void write(char ch) override { *it = ch;  ++it; }
 	void write(const char* str, size_t n) override {
-		for (size_t i = 0; i < n; i++) *(it++) = str[i];
+		for (size_t i = 0; i < n; i++) *it = str[i], ++it;
 	}
 };
 
@@ -361,13 +363,13 @@ private:
 
 	struct dump_context {
 		writer* wr;
-		const dump_options* opt;
+		const dump_options opt;
 		int indent = 0;
 		static constexpr int SP_N = 32;
 		char spaces[SP_N] = "";
 
-		dump_context(writer* wr, const dump_options& options) : wr(wr), opt(&options) {
-			if (opt->indent > 0) memset(spaces, opt->indent_char, SP_N);
+		dump_context(writer* wr, const dump_options& options) : opt(options), wr(wr) {
+			if (opt.indent > 0) memset(spaces, opt.indent_char, SP_N);
 			else indent = -1;
 		}
 
@@ -387,12 +389,12 @@ private:
 		case 0: return ctx.wr->write("null");
 		case 1: return get_bool() ? ctx.wr->write("true") : ctx.wr->write("false");
 		case 2: return _dump_number(ctx.wr, get_number());
-		case 3: return _dump_string(ctx.wr, get_string(), ctx.opt->ensure_ascii);
+		case 3: return _dump_string(ctx.wr, get_string(), ctx.opt.ensure_ascii);
 		case 4: {	// array
 			auto& arr = get_array();
 			if (arr.empty()) return ctx.wr->write("[]");
 			ctx.wr->write('[');
-			ctx.indent += ctx.opt->indent;
+			ctx.indent += ctx.opt.indent;
 			bool first = true;
 			for (auto& j : arr) {
 				if (first) first = false;
@@ -400,7 +402,7 @@ private:
 				ctx.newline();
 				j.dump(ctx);
 			}
-			ctx.indent -= ctx.opt->indent;
+			ctx.indent -= ctx.opt.indent;
 			ctx.newline();
 			return ctx.wr->write(']');
 		}
@@ -408,17 +410,17 @@ private:
 			auto& obj = get_object();
 			if (obj.empty()) return ctx.wr->write("{}");
 			ctx.wr->write('{');
-			ctx.indent += ctx.opt->indent;
+			ctx.indent += ctx.opt.indent;
 			bool first = true;
 			for (auto& p : obj) {
 				if (first) first = false;
 				else ctx.wr->write(',');
 				ctx.newline();
-				_dump_string(ctx.wr, p.first, ctx.opt->ensure_ascii);
+				_dump_string(ctx.wr, p.first, ctx.opt.ensure_ascii);
 				ctx.wr->write(": ");
 				p.second.dump(ctx);
 			}
-			ctx.indent -= ctx.opt->indent;
+			ctx.indent -= ctx.opt.indent;
 			ctx.newline();
 			return ctx.wr->write('}');
 		}
@@ -433,6 +435,12 @@ public:
 		dump(ctx);
 	}
 
+	template<class OutIt>
+	void dump(OutIt&& iter, const dump_options& options = {}) const {
+		std::void_t<decltype(*iter++ = ' '), decltype(OutIt(iter))>(0);	// check if iter is an output iterator
+		dump(iter, options);
+	}
+
 	string dumps(const dump_options& options = {}) const {
 		string str{};
 		dump(str, options);
@@ -442,8 +450,9 @@ public:
 	template<class Iter>
 	static basic_json load(Iter first, Iter last) {
 		static_assert(std::is_same_v<std::iterator_traits<Iter>::value_type, char>);
+		basic_json ret;
 
-		return basic_json();
+		return ret;
 	}
 };
 
