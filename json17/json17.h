@@ -94,6 +94,7 @@ class writer {
 public:
 	virtual void write(char ch) = 0;
 	virtual void write(const char* str, size_t n) = 0;
+	virtual ~writer() = default;
 
 	// convenience functions
 	inline void write_c(const char* str) { write(str, strlen(str)); }
@@ -146,6 +147,63 @@ public:
 	void write(char ch) override { ptr->put(ch); }
 	void write(const char* str, size_t n = 0) override { ptr->write(str, n); }
 };
+
+template<class Iter>
+class reader_interface;
+
+// a reader interface which supports reading chars, need reader_interface<> class to link with underlying type
+// the general reader_interface<> template supports an input iterator pair
+// inspired by golang's Reader interface
+class reader
+{
+public:
+	// return 0 if nothing to read
+	virtual char read() = 0;
+	virtual ~reader() = default;
+
+	template<class Target>
+	static std::unique_ptr<reader> New(Target& target) {
+		static_assert(std::is_base_of_v<reader, reader_interface<Target>>);
+		return std::make_unique<reader_interface<Target>>(target);
+	}
+
+	template<class Iter>
+	static std::unique_ptr<reader> New(Iter first, Iter last) {
+		static_assert(std::is_base_of_v<reader, reader_interface<Iter>>);
+		return std::make_unique<reader_interface<Iter>>(first, last);
+	}
+};
+
+template<class Iter>
+class reader_interface : public reader
+{
+public:
+	static_assert(std::is_same_v<std::iterator_traits<Iter>::value_type, char>);
+
+	Iter first, last;
+	reader_interface(Iter first, Iter last) : first(first), last(last) {}
+	char read() override { return first == last ? 0 : *first++; }
+};
+
+template<>
+class reader_interface<std::istream> : public reader
+{
+public:
+	std::istreambuf_iterator<char> first, last;
+	reader_interface(std::istream& is) : first(is), last() {}
+	char read() override { return first == last ? 0 : *first++; }
+};
+
+// null-terminated c-style string, use simplified implementation
+template<>
+class reader_interface<const char*> : public reader
+{
+public:
+	const char* it;
+	reader_interface(const char* it) : it(it) {}
+	char read() override { return *it++; }
+};
+
 
 template<class Traits = json_traits>
 class basic_json
@@ -231,6 +289,7 @@ public:
 	const array&  get_array()  const { return *std::get<sptr_array_t>(m_var); }
 	const object& get_object() const { return *std::get<sptr_object_t>(m_var); }
 
+	string& set_string() { m_var = _make_smart<string>();  return get_string(); }
 	array&  set_array()  { m_var = _make_smart<array>();  return get_array(); }
 	object& set_object() { m_var = _make_smart<object>();  return get_object(); }
 
@@ -383,7 +442,7 @@ private:
 		}
 	};
 
-	void dump(dump_context& ctx) const {
+	void _dump(dump_context& ctx) const {
 		// TODO use std::visit
 		switch (m_var.index()) {
 		case 0: return ctx.wr->write("null");
@@ -400,7 +459,7 @@ private:
 				if (first) first = false;
 				else ctx.wr->write(',');
 				ctx.newline();
-				j.dump(ctx);
+				j._dump(ctx);
 			}
 			ctx.indent -= ctx.opt.indent;
 			ctx.newline();
@@ -418,7 +477,7 @@ private:
 				ctx.newline();
 				_dump_string(ctx.wr, p.first, ctx.opt.ensure_ascii);
 				ctx.wr->write(": ");
-				p.second.dump(ctx);
+				p.second._dump(ctx);
 			}
 			ctx.indent -= ctx.opt.indent;
 			ctx.newline();
@@ -432,7 +491,8 @@ public:
 	void dump(Target& target, const dump_options& options = {}) const {
 		auto wr = writer::New(target);
 		dump_context ctx(wr.get(), options);
-		dump(ctx);
+		_dump(ctx);
+		if (options.indent >= 0) wr->write('\n');
 	}
 
 	template<class OutIt>
@@ -447,13 +507,120 @@ public:
 		return str;
 	}
 
-	template<class Iter>
-	static basic_json load(Iter first, Iter last) {
-		static_assert(std::is_same_v<std::iterator_traits<Iter>::value_type, char>);
-		basic_json ret;
+private:
+	// parse number and store to *this, ch is the read char and must be - or 0-9
+	bool _parse_number(reader* rd, char ch) {
+		bool neg = ch == '-';
+		if (neg) {
+			ch = rd->read();
+			if (!isdigit(ch)) return false;
+		}
+		number num = 0;
+		if (ch != '0') {
+			do {
+				num = num * 10 + (ch - '0');
+				ch = rd->read();
+			} while (isdigit(ch));
+		}
+		else ch = rd->read();
 
-		return ret;
+		if (ch == '.') {
+			number base = 1;
+			while (isdigit(ch = rd->read())) {
+				base /= 10;
+				num += base * (ch - '0');
+			}
+		}
+		if (ch == 'E' || ch == 'e') {
+			ch = rd->read();
+			bool eneg = ch == '-';
+			if (ch == '+' || ch == '-') ch = rd->read();
+			if (!isdigit(ch)) return false;
+			int expo = ch - '0';
+			while (isdigit(ch = rd->read())) {
+				expo = expo * 10 + (ch - '0');
+			}
+			num *= pow(10, eneg ? -expo : expo);
+		}
+		m_var = neg ? -num : num;
+		return true;
 	}
+
+	static bool _parse_string(reader* rd, string& out) {
+
+		return true;
+	}
+
+	static bool _parse_array(reader* rd, array& out) {
+
+		return true;
+	}
+
+	static bool _parse_object(reader* rd, object& out) {
+
+		return true;
+	}
+
+	bool _parse(reader* rd) {
+		char ch;
+		do ch = rd->read(); while (isspace(ch));
+		if (ch == '\0') return false;
+		bool res = true;
+		if (isdigit(ch)) return _parse_number(rd, ch);
+		else switch (ch) {
+		case '"': return _parse_string(rd, set_string());
+		case '{': return _parse_object(rd, set_object());
+		case '[': return _parse_array(rd, set_array());
+		case '-': return _parse_number(rd, ch);
+		case 't': 
+			if (rd->read() != 'r' || rd->read() != 'u' || rd->read() != 'e') return false;
+			m_var = true;
+			return true;
+		case 'f':
+			if (rd->read() != 'a' || rd->read() != 'l' || rd->read() != 's' || rd->read() != 'e') return false;
+			m_var = false;
+			return true;
+		case 'n':
+			if (rd->read() != 'u' || rd->read() != 'l' || rd->read() != 'l') return false;
+			m_var = nullptr;
+			return true;
+		default: return false;
+		}
+	}
+
+public:
+	template<class Target>
+	bool load(Target& target) {
+		auto rd = reader::New(target);
+		return _parse(rd.get());
+	}
+
+	template<class Iter>
+	bool load(Iter first, Iter last) {
+		static_assert(std::is_same_v<std::iterator_traits<Iter>::value_type, char>);
+		auto rd = reader::New(first, last);
+		return _parse(rd.get());
+	}
+
+	bool loads(const char* str) { return load(str); }
+	bool loads(const std::string& str) { return loads(str.data()); }
+
+	template<class Target>
+	static basic_json parse(Target& target) { 
+		basic_json j;
+		if (!j.load(target)) throw std::invalid_argument("not a valid json");
+		return j;
+	}
+
+	template<class Iter>
+	static basic_json parse(Iter first, Iter last) {
+		basic_json j;
+		if (!j.load(first, last)) throw std::invalid_argument("not a valid json");
+		return j;
+	}
+
+	static basic_json parse(const char* str) { return parse<const char*>(str); }
+	static basic_json parse(const std::string& str) { return parse(str.data()); }
 };
 
 using json         = basic_json<json_traits>;

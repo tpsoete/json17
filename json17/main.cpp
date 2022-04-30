@@ -20,7 +20,7 @@ int main()
 	printf("j[first].size = %zu\n", j["first"]["1"].get_array().size());
 	printf("j[third][1] = %e\n", j["third"][1].get_number());
 
-	printf("%s\n", j.dumps().c_str());
+	printf("%s\n", j.dumps(2).c_str());
 	
 	std::string res;
 	auto biter = std::back_inserter(res);
@@ -32,5 +32,15 @@ int main()
 	j.dump(std::cout, 4);
 	std::cout << std::endl;
 	j["third"].dump(std::cout, json17::dump_options(1, '\t'));
+
+	json jp;
+	jp = json::parse("123.45e6");
+	jp.dump(std::cout);
+	std::cout << "\n";
+	jp.loads("false");
+	jp.dump(std::cout);
+	std::cout << "\n";
+	jp.loads("null");
+	jp.dump(std::cout);
 	return 0;
 }
