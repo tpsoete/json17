@@ -1,10 +1,12 @@
 #include "json17.h"
 
+#include <fstream>
 
-int main()
+
+using json = json17::json_inplace;
+
+int main1()
 {
-	using json17::json;
-
 	json j;
 	j["first"] = json::object{ 
 		{"1", json::array{123,"456",false,nullptr}},
@@ -34,13 +36,53 @@ int main()
 	j["third"].dump(std::cout, json17::dump_options(1, '\t'));
 
 	json jp;
-	jp = json::parse("123.45e6");
-	jp.dump(std::cout);
-	std::cout << "\n";
-	jp.loads("false");
-	jp.dump(std::cout);
-	std::cout << "\n";
-	jp.loads("null");
-	jp.dump(std::cout);
+	jp = json::parse("[false,123.45e6,true,{\"2\":null}, -8]");
+	jp.dump(std::cout, 2);
+	for (;;) {
+		std::cout << "Input json in one line:\n";
+		std::getline(std::cin, res);
+		try {
+			jp.loads(res);
+			jp.dump(std::cout, 2);
+			std::cout << std::endl;
+		}
+		catch (const std::exception& e) {
+			std::cout << e.what() << std::endl;
+			break;
+		}
+	}
+	return 0;
+}
+
+int main2()
+{
+	std::string str = R"(
+{
+	"123":"456\n\r",
+	"this": [true, null, false, 127e25, -13, 7.e-34],
+	"that": { "\u0033": "\ufffd\ufffd", "\u0020": []},
+	"what": [{}],
+	"dcicxcl\bdsljfh": "null"
+})";
+	json j = json::parse(str);
+	j.dump(std::cout, 2);
+	return 0;
+}
+
+int main()
+{
+	main2();
+	main1();
+	std::cout << "\n will read file from demo.json \n";
+	system("pause");
+	std::ifstream ifs("demo.json");
+	if (!ifs.is_open()) {
+		std::cout << "file not opened: demo.json\n";
+		return 1;
+	}
+	std::string res = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+	json j;
+	j.loads(res);
+	std::cout << j.dumps(4);
 	return 0;
 }

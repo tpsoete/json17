@@ -157,9 +157,15 @@ class reader_interface;
 class reader
 {
 public:
-	// return 0 if nothing to read
+	// return EOF if nothing to read
 	virtual char read() = 0;
 	virtual ~reader() = default;
+
+	char nonspace_read() {
+		char ch;
+		do ch = read(); while (isspace(ch));
+		return ch;
+	}
 
 	template<class Target>
 	static std::unique_ptr<reader> New(Target& target) {
@@ -182,7 +188,7 @@ public:
 
 	Iter first, last;
 	reader_interface(Iter first, Iter last) : first(first), last(last) {}
-	char read() override { return first == last ? 0 : *first++; }
+	char read() override { return first == last ? EOF : *first++; }
 };
 
 template<>
@@ -191,17 +197,17 @@ class reader_interface<std::istream> : public reader
 public:
 	std::istreambuf_iterator<char> first, last;
 	reader_interface(std::istream& is) : first(is), last() {}
-	char read() override { return first == last ? 0 : *first++; }
+	char read() override { return first == last ? EOF : *first++; }
 };
 
-// null-terminated c-style string, use simplified implementation
+// null-terminated c-style string, use simplified implementation, turn \0 into EOF and stop iterating
 template<>
 class reader_interface<const char*> : public reader
 {
 public:
 	const char* it;
 	reader_interface(const char* it) : it(it) {}
-	char read() override { return *it++; }
+	char read() override { return *it == '\0' ? EOF : *it++; }
 };
 
 
@@ -385,7 +391,7 @@ private:
 			sprintf(buf, "%d", int(num));
 		}
 		else {
-			sprintf(buf, "%.17g", num);
+			sprintf(buf, "%.17g", num);	 // 17 == std::numeric_limits<double>::max_digits10
 		}
 		wr->write_c(buf);
 	}
@@ -398,20 +404,26 @@ private:
 			switch (ch) {
 			case '"': wr->write("\\\""); break;
 			case '\\': wr->write("\\\\"); break;
-			case '\b': wr->write("\\\b"); break;
-			case '\f': wr->write("\\\f"); break;
-			case '\n': wr->write("\\\n"); break;
-			case '\r': wr->write("\\\r"); break;
-			case '\t': wr->write("\\\t"); break;
+			case '\b': wr->write("\\b"); break;
+			case '\f': wr->write("\\f"); break;
+			case '\n': wr->write("\\n"); break;
+			case '\r': wr->write("\\r"); break;
+			case '\t': wr->write("\\t"); break;
 			case '\x7f': wr->write("\\u007f"); break;
 			default:
-				if (ch < 0x20) {
+				if (unsigned(ch) < 0x20) {
 					char buf[] = "\\u0000";
-					buf[4] = i < 0x10 ? '0' : '1';
-					buf[5] = '0' + (i & 0x0f);
+					buf[4] = ch < 0x10 ? '0' : '1';
+					buf[5] = '0' + (ch & 0x0f);
 					wr->write(buf, 6);
 				}
-				// TODO special chars, and ensure_ascii option
+				// TODO convert utf8
+				else if (ensure_ascii && unsigned(ch) >= 0x80) {
+					char buf[] = "\\u0000";
+					buf[4] = '0' + (ch >> 4);
+					buf[5] = '0' + (ch & 0x0f);
+					wr->write(buf, 6);
+				}
 				else {
 					wr->write(ch);
 				}
@@ -508,8 +520,11 @@ public:
 	}
 
 private:
+	// all _parse* return EOF for nothing to read, '\0'(false) for parse failed
+
 	// parse number and store to *this, ch is the read char and must be - or 0-9
-	bool _parse_number(reader* rd, char ch) {
+	// since number do not have a terminator, return the non-number char, returning '\0' means parse failed
+	char _parse_number(reader* rd, char ch) {
 		bool neg = ch == '-';
 		if (neg) {
 			ch = rd->read();
@@ -543,29 +558,106 @@ private:
 			num *= pow(10, eneg ? -expo : expo);
 		}
 		m_var = neg ? -num : num;
-		return true;
+		return isspace(ch) ? rd->nonspace_read() : ch;
 	}
 
-	static bool _parse_string(reader* rd, string& out) {
-
-		return true;
+	static int _read_hex4(reader* rd) {
+		char h[5]{ rd->read(), rd->read(), rd->read(), rd->read(), '\0' };
+		int ret = 0;
+		for (int i = 0; i < 4; i++) {
+			int bits = (3 - i) * 4;
+			if (isdigit(h[i])) ret |= (h[i] - '0') << bits;
+			else if (unsigned(h[i] - 'a') < 6u) ret |= (h[i] - 'a' + 10) << bits;
+			else if (unsigned(h[i] - 'A') < 6u) ret |= (h[i] - 'A' + 10) << bits;
+			else return false;
+		}
+		return ret;
 	}
 
-	static bool _parse_array(reader* rd, array& out) {
-
-		return true;
+	static void _store_utf8(int cp, char* out) {
+		if (cp < 0x80) out[0] = cp, out[1] = 0;
+		else if (cp < 0x0800) {
+			out[0] = 0xc0 | cp >> 6;
+			out[1] = 0x80 | cp & 0x3f;
+			out[2] = 0;
+		}
+		else if (cp < 0xffff) {
+			out[0] = 0xc0 | cp >> 12;
+			out[1] = 0x80 | cp >> 6 & 0x3f;
+			out[2] = 0x80 | cp & 0x3f;
+			out[3] = 0;
+		}
+		else {
+			out[0] = 0xc0 | cp >> 18;
+			out[1] = 0x80 | cp >> 12 & 0x3f;
+			out[2] = 0x80 | cp >> 6 & 0x3f;
+			out[3] = 0x80 | cp & 0x3f;
+			out[4] = 0;
+		}
 	}
 
-	static bool _parse_object(reader* rd, object& out) {
-
-		return true;
+	static char _parse_string(reader* rd, string& out) {
+		for (char ch = rd->read(); ch != '"'; ch = rd->read()) {
+			if (ch == EOF) return false;
+			if (ch != '\\') {
+				out += ch;
+				continue;
+			}
+			// TODO check control characters
+			switch (ch = rd->read())
+			{
+			case '"': 
+			case '\\':
+			case '/': out += ch; break;
+			case 'b': out += '\b'; break;
+			case 'f': out += '\f'; break;
+			case 'n': out += '\n'; break;
+			case 'r': out += '\r'; break;
+			case 't': out += '\t'; break;
+			case 'u': {
+				int cp = _read_hex4(rd);
+				if (!cp) return false;
+				// TODO UTF-16 surrogate pair
+				char u8str[8];
+				_store_utf8(cp, u8str);
+				out += u8str;
+				break;
+			}
+			default: (out += '\\') += ch; break;	// TODO return false?
+			}
+		}
+		return rd->nonspace_read();
 	}
 
-	bool _parse(reader* rd) {
-		char ch;
-		do ch = rd->read(); while (isspace(ch));
-		if (ch == '\0') return false;
-		bool res = true;
+	static char _parse_array(reader* rd, array& out) {
+		char ch = rd->nonspace_read();
+		if (ch == ']') return rd->nonspace_read();
+		for (;;) {
+			ch = out.emplace_back()._parse(rd, ch);
+			if (!ch) return false;
+			if (ch == ']') return rd->nonspace_read();
+			if (ch != ',') return false;
+			ch = rd->nonspace_read();
+		}
+	}
+
+	static char _parse_object(reader* rd, object& out) {
+		char ch = rd->nonspace_read();
+		if (ch == '}') return rd->nonspace_read();
+		for (; ch == '"'; ch = rd->nonspace_read()) {
+			string key;
+			basic_json value;
+			if (!(ch = _parse_string(rd, key))) return false;
+			if (ch != ':') return false;
+			if (!(ch = value._parse(rd, rd->nonspace_read()))) return false;
+			out.emplace(std::move(key), std::move(value));
+			if (ch == '}') return rd->nonspace_read();
+			if (ch != ',') return false;
+		}
+		return false;
+	}
+
+	char _parse(reader* rd, char ch) {
 		if (isdigit(ch)) return _parse_number(rd, ch);
 		else switch (ch) {
 		case '"': return _parse_string(rd, set_string());
@@ -575,47 +667,52 @@ private:
 		case 't': 
 			if (rd->read() != 'r' || rd->read() != 'u' || rd->read() != 'e') return false;
 			m_var = true;
-			return true;
+			return rd->nonspace_read();
 		case 'f':
 			if (rd->read() != 'a' || rd->read() != 'l' || rd->read() != 's' || rd->read() != 'e') return false;
 			m_var = false;
-			return true;
+			return rd->nonspace_read();
 		case 'n':
 			if (rd->read() != 'u' || rd->read() != 'l' || rd->read() != 'l') return false;
 			m_var = nullptr;
-			return true;
+			return rd->nonspace_read();
 		default: return false;
 		}
 	}
 
+	void _load(reader* rd) {
+		char ch = rd->nonspace_read();
+		if (!_parse(rd, ch)) throw std::invalid_argument("not a valid json");
+	}
+
 public:
 	template<class Target>
-	bool load(Target& target) {
+	void load(Target& target) {
 		auto rd = reader::New(target);
-		return _parse(rd.get());
+		_load(rd.get());
 	}
 
 	template<class Iter>
-	bool load(Iter first, Iter last) {
+	void load(Iter first, Iter last) {
 		static_assert(std::is_same_v<std::iterator_traits<Iter>::value_type, char>);
 		auto rd = reader::New(first, last);
-		return _parse(rd.get());
+		_load(rd.get());
 	}
 
-	bool loads(const char* str) { return load(str); }
-	bool loads(const std::string& str) { return loads(str.data()); }
+	void loads(const char* str) { load(str); }
+	void loads(const std::string& str) { loads(str.data()); }
 
-	template<class Target>
+	template<class Target, class = typename std::iterator_traits<Target>::value_type>
 	static basic_json parse(Target& target) { 
 		basic_json j;
-		if (!j.load(target)) throw std::invalid_argument("not a valid json");
+		j.load(target);
 		return j;
 	}
 
 	template<class Iter>
 	static basic_json parse(Iter first, Iter last) {
 		basic_json j;
-		if (!j.load(first, last)) throw std::invalid_argument("not a valid json");
+		j.load(first, last);
 		return j;
 	}
 
