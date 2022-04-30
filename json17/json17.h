@@ -104,8 +104,13 @@ public:
 
 	template<class Target>
 	static std::unique_ptr<writer> New(Target& target) {
-		static_assert(std::is_base_of_v<writer, writer_interface<Target>>);
-		return std::make_unique<writer_interface<Target>>(target);
+		if constexpr (std::is_base_of_v<std::ostream, Target>) {
+			return std::make_unique<writer_interface<std::ostream>>(target);
+		}
+		else {
+			static_assert(std::is_base_of_v<writer, writer_interface<Target>>);
+			return std::make_unique<writer_interface<Target>>(target);
+		}
 	}
 };
 
@@ -169,8 +174,13 @@ public:
 
 	template<class Target>
 	static std::unique_ptr<reader> New(Target& target) {
-		static_assert(std::is_base_of_v<reader, reader_interface<Target>>);
-		return std::make_unique<reader_interface<Target>>(target);
+		if constexpr (std::is_base_of_v<std::istream, Target>) {
+			return std::make_unique<reader_interface<std::istream>>(target);
+		}
+		else {
+			static_assert(std::is_base_of_v<reader, reader_interface<Target>>);
+			return std::make_unique<reader_interface<Target>>(target);
+		}
 	}
 
 	template<class Iter>
@@ -195,9 +205,9 @@ template<>
 class reader_interface<std::istream> : public reader
 {
 public:
-	std::istreambuf_iterator<char> first, last;
-	reader_interface(std::istream& is) : first(is), last() {}
-	char read() override { return first == last ? EOF : *first++; }
+	std::istream* ptr;
+	reader_interface(std::istream& is) : ptr(&is) {}
+	char read() override { return ptr->get(); }
 };
 
 // null-terminated c-style string, use simplified implementation, turn \0 into EOF and stop iterating
@@ -259,6 +269,7 @@ public:
 
 	// make a deep copy even if using shared pointer
 	basic_json& operator=(const basic_json& other) {
+		// TODO use std::visit
 		switch (other.m_var.index()) {
 		case 0: m_var = nullptr; break;
 		case 1: m_var = other.get_bool(); break;
@@ -271,16 +282,16 @@ public:
 	}
 	basic_json(const basic_json& other) { operator=(other); }
 
-	variant_t&       get_variant()       { return m_var; }
-	const variant_t& get_variant() const { return m_var; }
+	variant_t&       get_variant()       noexcept { return m_var; }
+	const variant_t& get_variant() const noexcept { return m_var; }
 
-	json_type get_type() const { return (json_type)m_var.index(); }
-	bool is_null()   const { return m_var.index() == 0; }
-	bool is_bool()   const { return m_var.index() == 1; }
-	bool is_number() const { return m_var.index() == 2; }
-	bool is_string() const { return m_var.index() == 3; }
-	bool is_array()  const { return m_var.index() == 4; }
-	bool is_object() const { return m_var.index() == 5; }
+	json_type get_type() const noexcept { return (json_type)m_var.index(); }
+	bool is_null()   const noexcept { return m_var.index() == 0; }
+	bool is_bool()   const noexcept { return m_var.index() == 1; }
+	bool is_number() const noexcept { return m_var.index() == 2; }
+	bool is_string() const noexcept { return m_var.index() == 3; }
+	bool is_array()  const noexcept { return m_var.index() == 4; }
+	bool is_object() const noexcept { return m_var.index() == 5; }
 
 	bool&   get_bool()   { return std::get<bool>(m_var); }
 	number& get_number() { return std::get<number>(m_var); }
@@ -329,19 +340,20 @@ public:
 		return it->second;
 	}
 
-	bool*   ptr_bool()   { return std::get_if<bool>(&m_var); }
-	number* ptr_number() { return std::get_if<number>(&m_var); }
-	string* ptr_string() { auto* ptr = std::get_if<sptr_string_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
-	array*  ptr_array()  { auto* ptr = std::get_if<sptr_array_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
-	object* ptr_object() { auto* ptr = std::get_if<sptr_object_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
+	bool*   ptr_bool()   noexcept { return std::get_if<bool>(&m_var); }
+	number* ptr_number() noexcept { return std::get_if<number>(&m_var); }
+	string* ptr_string() noexcept { auto* ptr = std::get_if<sptr_string_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
+	array*  ptr_array()  noexcept { auto* ptr = std::get_if<sptr_array_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
+	object* ptr_object() noexcept { auto* ptr = std::get_if<sptr_object_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
 
-	const bool*   ptr_bool()   const { return std::get_if<bool>(&m_var); }
-	const number* ptr_number() const { return std::get_if<number>(&m_var); }
-	const string* ptr_string() const { auto* ptr = std::get_if<sptr_string_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
-	const array*  ptr_array()  const { auto* ptr = std::get_if<sptr_array_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
-	const object* ptr_object() const { auto* ptr = std::get_if<sptr_object_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
+	const bool*   ptr_bool()   const noexcept { return std::get_if<bool>(&m_var); }
+	const number* ptr_number() const noexcept { return std::get_if<number>(&m_var); }
+	const string* ptr_string() const noexcept { auto* ptr = std::get_if<sptr_string_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
+	const array*  ptr_array()  const noexcept { auto* ptr = std::get_if<sptr_array_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
+	const object* ptr_object() const noexcept { auto* ptr = std::get_if<sptr_object_t>(&m_var);  return ptr ? ptr->get() : nullptr; }
 
-	// do not set to nullptr, will lead to UB;
+	// return the underlying smart pointer
+	// do not set to nullptr, will lead to nullptr dereference
 	sptr_string_t& sptr_string() { return std::get<sptr_string_t>(m_var); }
 	sptr_array_t&  sptr_array()  { return std::get<sptr_array_t>(m_var); }
 	sptr_object_t& sptr_object() { return std::get<sptr_object_t>(m_var); }
@@ -436,8 +448,8 @@ private:
 		writer* wr;
 		const dump_options opt;
 		int indent = 0;
-		static constexpr int SP_N = 32;
-		char spaces[SP_N] = "";
+		static constexpr int SP_N = 64;
+		char spaces[SP_N] = "";	// fill consecutive indent_char, may be redundant
 
 		dump_context(writer* wr, const dump_options& options) : opt(options), wr(wr) {
 			if (opt.indent > 0) memset(spaces, opt.indent_char, SP_N);
@@ -576,12 +588,12 @@ private:
 
 	static void _store_utf8(int cp, char* out) {
 		if (cp < 0x80) out[0] = cp, out[1] = 0;
-		else if (cp < 0x0800) {
+		else if (cp <= 0x07ff) {
 			out[0] = 0xc0 | cp >> 6;
 			out[1] = 0x80 | cp & 0x3f;
 			out[2] = 0;
 		}
-		else if (cp < 0xffff) {
+		else if (cp <= 0xffff) {
 			out[0] = 0xc0 | cp >> 12;
 			out[1] = 0x80 | cp >> 6 & 0x3f;
 			out[2] = 0x80 | cp & 0x3f;
@@ -680,27 +692,29 @@ private:
 		}
 	}
 
-	void _load(reader* rd) {
+	bool _load(reader* rd, bool nothrow) {
 		char ch = rd->nonspace_read();
-		if (!_parse(rd, ch)) throw std::invalid_argument("not a valid json");
+		bool res = _parse(rd, ch);
+		if (!res && !nothrow) throw std::invalid_argument("not a valid json");
+		return res;
 	}
 
 public:
 	template<class Target>
-	void load(Target& target) {
+	bool load(Target& target, bool nothrow = false) {
 		auto rd = reader::New(target);
-		_load(rd.get());
+		return _load(rd.get(), nothrow);
 	}
 
 	template<class Iter>
-	void load(Iter first, Iter last) {
+	bool load(Iter first, Iter last, bool nothrow = false) {
 		static_assert(std::is_same_v<std::iterator_traits<Iter>::value_type, char>);
 		auto rd = reader::New(first, last);
-		_load(rd.get());
+		return _load(rd.get(), nothrow);
 	}
 
-	void loads(const char* str) { load(str); }
-	void loads(const std::string& str) { loads(str.data()); }
+	bool loads(const char* str, bool nothrow = false) { return load(str, nothrow); }
+	bool loads(const std::string& str, bool nothrow = false) { return loads(str.data(), nothrow); }
 
 	template<class Target, class = typename std::iterator_traits<Target>::value_type>
 	static basic_json parse(Target& target) { 

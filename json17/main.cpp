@@ -80,9 +80,8 @@ int main()
 		std::cout << "file not opened: demo.json\n";
 		return 1;
 	}
-	std::string res = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
 	json j;
-	j.loads(res);
+	j.load(ifs);
 	std::cout << j.dumps(4);
 	return 0;
 }
