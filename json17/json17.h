@@ -409,6 +409,7 @@ private:
 	}
 
 	static void _dump_string(writer* wr, const string& str, bool ensure_ascii) {
+		static constexpr char HEX[] = "0123456789abcdef";
 		wr->write('"');
 		size_t n = str.length();
 		for (size_t i = 0; i < n; i++) {
@@ -423,17 +424,18 @@ private:
 			case '\t': wr->write("\\t"); break;
 			case '\x7f': wr->write("\\u007f"); break;
 			default:
-				if (unsigned(ch) < 0x20) {
+				uint8_t uch = ch;
+				if (uch < 0x20) {
 					char buf[] = "\\u0000";
 					buf[4] = ch < 0x10 ? '0' : '1';
-					buf[5] = '0' + (ch & 0x0f);
+					buf[5] = HEX[ch & 0x0f];
 					wr->write(buf, 6);
 				}
 				// TODO convert utf8
-				else if (ensure_ascii && unsigned(ch) >= 0x80) {
+				else if (ensure_ascii && uch >= 0x80) {
 					char buf[] = "\\u0000";
-					buf[4] = '0' + (ch >> 4);
-					buf[5] = '0' + (ch & 0x0f);
+					buf[4] = HEX[uch >> 4];
+					buf[5] = HEX[uch & 0x0f];
 					wr->write(buf, 6);
 				}
 				else {
@@ -594,13 +596,13 @@ private:
 			out[2] = 0;
 		}
 		else if (cp <= 0xffff) {
-			out[0] = 0xc0 | cp >> 12;
+			out[0] = 0xe0 | cp >> 12;
 			out[1] = 0x80 | cp >> 6 & 0x3f;
 			out[2] = 0x80 | cp & 0x3f;
 			out[3] = 0;
 		}
 		else {
-			out[0] = 0xc0 | cp >> 18;
+			out[0] = 0xf0 | cp >> 18;
 			out[1] = 0x80 | cp >> 12 & 0x3f;
 			out[2] = 0x80 | cp >> 6 & 0x3f;
 			out[3] = 0x80 | cp & 0x3f;
@@ -615,7 +617,6 @@ private:
 				out += ch;
 				continue;
 			}
-			// TODO check control characters
 			switch (ch = rd->read())
 			{
 			case '"': 

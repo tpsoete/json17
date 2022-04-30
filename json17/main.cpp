@@ -66,6 +66,7 @@ int main2()
 })";
 	json j = json::parse(str);
 	j.dump(std::cout, 2);
+	j.dump(std::cout, json17::dump_options(1, '\t', true));
 	return 0;
 }
 
