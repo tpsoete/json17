@@ -1,9 +1,10 @@
 #include "json17.h"
 
+#include <iostream>
 #include <fstream>
 
 
-using json = json17::json_inplace;
+using json = json17::json;
 
 int main1()
 {
@@ -24,27 +25,18 @@ int main1()
 
 	printf("%s\n", j.dumps(2).c_str());
 	
-	std::string res;
-	auto biter = std::back_inserter(res);
-	j["first"].dump(std::back_inserter(res));
-	res += '\n';
-	j["second"].dump(res.begin());
+	std::string res = j.dumps();
 	printf("%s\n\n", res.c_str());
-
-	j.dump(std::cout, 4);
-	std::cout << std::endl;
-	j["third"].dump(std::cout, json17::dump_options(1, '\t'));
 
 	json jp;
 	jp = json::parse("[false,123.45e6,true,{\"2\":null}, -8]");
-	jp.dump(std::cout, 2);
+	std::cout << jp.dumps(1, '\t');
 	for (;;) {
 		std::cout << "Input json in one line:\n";
 		std::getline(std::cin, res);
 		try {
 			jp.loads(res);
-			jp.dump(std::cout, 2);
-			std::cout << std::endl;
+			std::cout << jp.dumps(2) << std::endl;
 		}
 		catch (const std::exception& e) {
 			std::cout << e.what() << std::endl;
@@ -65,11 +57,10 @@ int main2()
 	"dcicxcl\bdsljfh": "null"
 })";
 	json j = json::parse(str);
-	j.dump(std::cout, 2);
-	j.dump(std::cout, json17::dump_options(1, '\t', true));
+	std::cout << j.dumps(2);
 	std::ofstream ofs("out.json");
 	if (ofs.is_open()) {
-		j.dump(ofs, 2);
+		ofs << j.dumps(2);
 	}
 	return 0;
 }
@@ -86,7 +77,8 @@ int main()
 		return 1;
 	}
 	json j;
-	j.load(ifs);
+	std::string str = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+	j.loads(str);
 	std::cout << j.dumps(4);
 	return 0;
 }
