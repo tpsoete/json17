@@ -60,13 +60,17 @@ int main2()
 {
 	"123":"456\n\r",
 	"this": [true, null, false, 127e25, -13, 7.e-34],
-	"that": { "\u0033": "\ufffd\ufffd", "\u0020": []},
+	"that": { "\u0033": "\ufffd\ufffd", "\ud852\uDF62": []},
 	"what": [{}],
 	"dcicxcl\bdsljfh": "null"
 })";
 	json j = json::parse(str);
 	j.dump(std::cout, 2);
 	j.dump(std::cout, json17::dump_options(1, '\t', true));
+	std::ofstream ofs("out.json");
+	if (ofs.is_open()) {
+		j.dump(ofs, 2);
+	}
 	return 0;
 }
 

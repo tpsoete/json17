@@ -588,7 +588,8 @@ private:
 		return ret;
 	}
 
-	static void _store_utf8(int cp, char* out) {
+	static void _store_utf8(int cp, string& out_str) {
+		char out[5] = "";
 		if (cp < 0x80) out[0] = cp, out[1] = 0;
 		else if (cp <= 0x07ff) {
 			out[0] = 0xc0 | cp >> 6;
@@ -608,16 +609,15 @@ private:
 			out[3] = 0x80 | cp & 0x3f;
 			out[4] = 0;
 		}
+		out_str += out;
 	}
 
 	static char _parse_string(reader* rd, string& out) {
+		int last_cp = 0;	// used for surrogate pair
 		for (char ch = rd->read(); ch != '"'; ch = rd->read()) {
 			if (ch == EOF) return false;
-			if (ch != '\\') {
-				out += ch;
-				continue;
-			}
-			switch (ch = rd->read())
+			if (ch != '\\') out += ch;
+			else switch (ch = rd->read())
 			{
 			case '"': 
 			case '\\':
@@ -630,13 +630,26 @@ private:
 			case 'u': {
 				int cp = _read_hex4(rd);
 				if (!cp) return false;
-				// TODO UTF-16 surrogate pair
-				char u8str[8];
-				_store_utf8(cp, u8str);
-				out += u8str;
-				break;
+				if (cp >= 0xD800 && cp < 0xDC00) {
+					last_cp = cp;
+					continue;
+				}
+				else if (last_cp) {
+					if (cp >= 0xDC00 && cp < 0xE000) {
+						cp = ((last_cp & 0x3ff) << 10 | cp & 0x3ff) + 0x10000;
+					}
+					else _store_utf8(last_cp, out);
+					last_cp = 0;
+				}
+				_store_utf8(cp, out);
+				continue;
 			}
 			default: (out += '\\') += ch; break;	// TODO return false?
+			}
+
+			if (last_cp) {
+				_store_utf8(last_cp, out);
+				last_cp = 0;
 			}
 		}
 		return rd->nonspace_read();
