@@ -369,9 +369,9 @@ private:
 	}
 
 public:
-	sptr_string_t get_moved_string() { return _get_moved<string>(); }
-	sptr_array_t  get_moved_array()  { return _get_moved<array>(); }
-	sptr_object_t get_moved_object() { return _get_moved<object>(); }
+	sptr_string_t get_moved_string() noexcept { return _get_moved<string>(); }
+	sptr_array_t  get_moved_array()  noexcept { return _get_moved<array>(); }
+	sptr_object_t get_moved_object() noexcept { return _get_moved<object>(); }
 
 	// if sptr_string_t is not copyable (i.e. std::unique_ptr), disable get_shared_*
 	template<class P = sptr_string_t>
@@ -408,8 +408,18 @@ private:
 		wr->write_c(buf);
 	}
 
+	static constexpr char HEX[] = "0123456789abcdef";
+
+	static void _write_hex4(int cp, char buf[]) {
+		// 0, 1 is '\\' 'u'
+		buf[2] = HEX[cp >> 12];
+		buf[3] = HEX[(cp >> 8) & 0x0f];
+		buf[4] = HEX[(cp >> 4) & 0x0f];
+		buf[5] = HEX[cp & 0x0f];
+	}
+
 	static void _dump_string(writer* wr, const string& str, bool ensure_ascii) {
-		static constexpr char HEX[] = "0123456789abcdef";
+		
 		wr->write('"');
 		size_t n = str.length();
 		for (size_t i = 0; i < n; i++) {
@@ -429,17 +439,57 @@ private:
 					char buf[] = "\\u0000";
 					buf[4] = ch < 0x10 ? '0' : '1';
 					buf[5] = HEX[ch & 0x0f];
-					wr->write(buf, 6);
+					wr->write(buf);
+					continue;
 				}
-				// TODO convert utf8
-				else if (ensure_ascii && uch >= 0x80) {
-					char buf[] = "\\u0000";
-					buf[4] = HEX[uch >> 4];
-					buf[5] = HEX[uch & 0x0f];
-					wr->write(buf, 6);
-				}
-				else {
+				if (uch < 0x80 || !ensure_ascii) {
 					wr->write(ch);
+					continue;
+				}
+				
+				// ensure ascii, uch >= 0x80
+				if (uch < 0xc2 || uch > 0xf4) {
+					wr->write("\\ufffd");
+					continue;
+				}
+				uint8_t uch2 = str[++i];
+				if (uch2 < 0x80 || uch2 >= 0xc0) {
+					wr->write("\\ufffd\\ufffd");
+					continue;
+				}
+				char buf[] = "\\u0000";
+				int u8len = uch < 0xe0 ? 2 : uch < 0xf0 ? 3 : 4;
+				if (u8len != 4) {
+					int cp = 0;
+					if (u8len == 2) cp = (uch & 0x1f) << 6 | uch2 & 0x3f;
+					else {
+						uint8_t uch3 = str[++i];
+						if (uch3 < 0x80 || uch3 >= 0xc0) {
+							for (int ii = 0; ii < 3; ii++) wr->write("\\ufffd");
+							continue;
+						}
+						cp = (uch & 0x0f) << 12 | (uch2 & 0x3f) << 6 | uch3 & 0x3f;
+					}
+					_write_hex4(cp, buf);
+					wr->write(buf);
+				}
+				else {	// 4-byte
+					uint8_t uch3 = str[++i];
+					if (uch3 < 0x80 || uch3 >= 0xc0) {
+						for (int ii = 0; ii < 3; ii++) wr->write("\\ufffd");
+						continue;
+					}
+					uint8_t uch4 = str[++i];
+					int cp = (uch & 0x07) << 18 | (uch2 & 0x3f) << 12 | (uch3 & 0x3f) << 6 | uch4 & 0x3f;
+					if (uch4 < 0x80 || uch4 >= 0xc0 || cp > 0x10ffff) {
+						for (int ii = 0; ii < 4; ii++) wr->write("\\ufffd");
+						continue;
+					}
+					cp -= 0x10000;
+					_write_hex4(0xD800 | cp >> 10, buf);
+					wr->write(buf);
+					_write_hex4(0xDC00 | cp & 0x3ff, buf);
+					wr->write(buf);
 				}
 			}
 		}
@@ -533,6 +583,10 @@ public:
 		return str;
 	}
 
+	string dumps(int indent, char indent_char, bool ensure_ascii = false) {
+		return dumps(dump_options(indent, indent_char, ensure_ascii));
+	}
+
 private:
 	// all _parse* return EOF for nothing to read, '\0'(false) for parse failed
 
@@ -590,7 +644,10 @@ private:
 
 	static void _store_utf8(int cp, string& out_str) {
 		char out[5] = "";
-		if (cp < 0x80) out[0] = cp, out[1] = 0;
+		if (cp <= 0x7f) {
+			out[0] = cp;
+			out[1] = 0;
+		}
 		else if (cp <= 0x07ff) {
 			out[0] = 0xc0 | cp >> 6;
 			out[1] = 0x80 | cp & 0x3f;
@@ -630,12 +687,12 @@ private:
 			case 'u': {
 				int cp = _read_hex4(rd);
 				if (!cp) return false;
-				if (cp >= 0xD800 && cp < 0xDC00) {
+				if (cp >= 0xD800 && cp <= 0xDBFF) {
 					last_cp = cp;
 					continue;
 				}
 				else if (last_cp) {
-					if (cp >= 0xDC00 && cp < 0xE000) {
+					if (cp >= 0xDC00 && cp <= 0xDFFF) {
 						cp = ((last_cp & 0x3ff) << 10 | cp & 0x3ff) + 0x10000;
 					}
 					else _store_utf8(last_cp, out);
@@ -730,21 +787,18 @@ public:
 	bool loads(const char* str, bool nothrow = false) { return load(str, nothrow); }
 	bool loads(const std::string& str, bool nothrow = false) { return loads(str.data(), nothrow); }
 
-	template<class Target, class = typename std::iterator_traits<Target>::value_type>
-	static basic_json parse(Target& target) { 
-		basic_json j;
-		j.load(target);
-		return j;
-	}
-
-	template<class Iter>
+	template<class Iter, typename std::iterator_traits<Iter>::value_type = 0>
 	static basic_json parse(Iter first, Iter last) {
 		basic_json j;
 		j.load(first, last);
 		return j;
 	}
 
-	static basic_json parse(const char* str) { return parse<const char*>(str); }
+	static basic_json parse(const char* str) { 
+		basic_json j;
+		j.load(str);
+		return j; 
+	}
 	static basic_json parse(const std::string& str) { return parse(str.data()); }
 };
 

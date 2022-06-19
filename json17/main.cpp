@@ -1,6 +1,7 @@
 #include "json17.h"
 
 #include <fstream>
+#include <typeinfo>
 
 
 using json = json17::json_inplace;
@@ -64,8 +65,10 @@ int main2()
 	"what": [{}],
 	"dcicxcl\bdsljfh": "null"
 })";
-	json j = json::parse(str);
+	json j = json::parse(str.begin(), str.end());
 	j.dump(std::cout, 2);
+	j["this"].get_array()[0] = std::string(u8"\u9999\U00021234\U0010ffff");
+	j["this"].get_array()[1] = std::string("\xc0\xe1\x80\x80\x80");
 	j.dump(std::cout, json17::dump_options(1, '\t', true));
 	std::ofstream ofs("out.json");
 	if (ofs.is_open()) {
@@ -74,8 +77,17 @@ int main2()
 	return 0;
 }
 
+template<class T>
+void show_size()
+{
+	std::cout << "sizeof " << typeid(T).name() << " = " << sizeof(T) << '\n';
+}
+
 int main()
 {
+	show_size<json17::json_inplace>();
+	show_size<json17::json>();
+	show_size<json17::json_shared>();
 	main2();
 	main1();
 	std::cout << "\n will read file from demo.json \n";
